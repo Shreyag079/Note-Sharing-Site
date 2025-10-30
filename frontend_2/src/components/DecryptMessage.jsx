@@ -1,15 +1,32 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
 export default function DecryptMessage() {
   const { id } = useParams();
   const [message, setMessage] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const fetchedRef = useRef(false);
 
   useEffect(() => {
+    if (fetchedRef.current) return;
+    fetchedRef.current = true;
     const fetchMessage = async () => {
-      const res = await fetch(`http://localhost:8000/api/message/${id}`);
+      const body = password
+        ? { passwordHash: await (async () => {
+            const pwBytes = new TextEncoder().encode(password);
+            const digest = await window.crypto.subtle.digest('SHA-256', pwBytes);
+            return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+          })() }
+        : {};
+      const res = await fetch(`http://localhost:8000/api/message/${id}/consume`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
       if (!res.ok) {
-        setMessage("Message expired or not found");
+        const err = await res.json().catch(() => ({}));
+        setError(err && err.error ? err.error : "Message expired or not found");
         return;
       }
       const data = await res.json();
@@ -37,6 +54,46 @@ export default function DecryptMessage() {
     };
     fetchMessage();
   }, [id]);
+
+  const handleShow = async () => {
+    setError("");
+    const body = password
+      ? { passwordHash: await (async () => {
+          const pwBytes = new TextEncoder().encode(password);
+          const digest = await window.crypto.subtle.digest('SHA-256', pwBytes);
+          return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+        })() }
+      : {};
+    const res = await fetch(`http://localhost:8000/api/message/${id}/consume`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      setError(err && err.error ? err.error : "Message expired or not found");
+      return;
+    }
+    const data = await res.json();
+    const payload = JSON.parse(data.encryptedMessage);
+    const key = new Uint8Array(payload.key);
+    const iv = new Uint8Array(payload.iv);
+    const encryptedData = new Uint8Array(payload.data);
+    const cryptoKey = await window.crypto.subtle.importKey(
+      "raw",
+      key,
+      "AES-GCM",
+      true,
+      ["decrypt"]
+    );
+    const decrypted = await window.crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      cryptoKey,
+      encryptedData
+    );
+    const decoder = new TextDecoder();
+    setMessage(decoder.decode(decrypted));
+  };
 
   return (
     <div className="app-bg min-h-screen">
@@ -68,6 +125,19 @@ export default function DecryptMessage() {
         </div>
 
         <div className="card p-6">
+          <label className="label" htmlFor="password">password</label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="field mb-4"
+            placeholder="Enter password if required"
+          />
+          {error && (
+            <div className="text-red-400 text-sm mb-2">{error}</div>
+          )}
+          <button onClick={handleShow} className="btn-primary px-4 py-2 mb-4">show note</button>
           <label className="label" htmlFor="decrypted-note">
             note
           </label>
